@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -32,7 +33,8 @@ func main() {
 
 	var (
 		api    = flag.String("herald", envOr("HERALD_API", "https://herald.kelliher.info"), "herald base URL")
-		aria   = flag.String("aria", os.Getenv("FIGARO_BRIDGE_ARIA"), "aria to route into (default: a fresh one per run)")
+		aria   = flag.String("aria", os.Getenv("FIGARO_BRIDGE_ARIA"), "aria to route into (default: whatever /bind last chose)")
+		stateP = flag.String("state", envOr("FIGARO_BRIDGE_STATE", defaultStatePath()), "where the current binding is remembered")
 		to     = flag.String("to", envOr("FIGARO_BRIDGE_TO", "gluck"), "herald recipient for replies")
 		wait   = flag.Duration("wait", 55*time.Second, "long-poll window (herald caps at 60s)")
 		turnTO = flag.Duration("turn-timeout", 15*time.Minute, "kill a figaro turn that outlives this")
@@ -47,8 +49,15 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// A binding survives restarts: without it a restart would silently start
+	// a new conversation, which is the kind of loss only noticed later.
+	bind := loadBinding(*stateP)
+	if *aria == "" {
+		*aria = bind.Aria
+	}
+
 	b := &bridge{
-		herald: c, aria: *aria, to: *to,
+		herald: c, aria: *aria, to: *to, binding: bind,
 		turnTimeout: *turnTO, figaro: *figBin, dryRun: *dryRun,
 	}
 
@@ -80,6 +89,12 @@ func main() {
 				log.Printf("handling %d: %v", m.ID, err)
 				continue
 			}
+			if *dryRun {
+				// A dry run must not consume the queue: acknowledging a
+				// message it only pretended to handle would silently discard
+				// it, which is the opposite of what --dry-run promises.
+				continue
+			}
 			// Acknowledge only after the reply is out. Delivery is
 			// at-least-once, so a crash mid-turn replays the message rather
 			// than losing it.
@@ -96,6 +111,7 @@ func main() {
 
 type bridge struct {
 	briefed     bool
+	binding     *binding
 	herald      *herald.Client
 	aria        string
 	to          string
@@ -113,7 +129,28 @@ const brief = "You are being addressed over Telegram, through herald. " +
 func (b *bridge) handle(ctx context.Context, m herald.Message) error {
 	log.Printf("from=%s: %.80q", m.From, m.Text)
 
-	prompt := "[telegram] " + m.Text
+	text := strings.TrimSpace(m.Text)
+
+	// Commands are handled here rather than passed to the aria: switching
+	// which aria a chat talks to cannot be the current aria's decision.
+	if reply, follow, handled := b.command(ctx, text); handled {
+		if b.dryRun {
+			fmt.Printf("command %q -> %s\n", text, reply)
+			return nil
+		}
+		sendCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		if err := b.herald.Say(sendCtx, b.to, reply); err != nil {
+			cancel()
+			return err
+		}
+		cancel()
+		if strings.TrimSpace(follow) == "" {
+			return nil
+		}
+		text = follow
+	}
+
+	prompt := "[telegram] " + text
 	if !b.briefed {
 		prompt = brief + "\n\n---\n\n" + prompt
 		b.briefed = true
@@ -158,6 +195,19 @@ func (b *bridge) ask(ctx context.Context, prompt string) (string, error) {
 		return text, fmt.Errorf("figaro: %w", err)
 	}
 	return text, nil
+}
+
+// defaultStatePath keeps the binding beside other user state.
+func defaultStatePath() string {
+	dir := os.Getenv("XDG_STATE_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		dir = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(dir, "figaro-bridge", "binding.json")
 }
 
 func orAuto(s string) string {

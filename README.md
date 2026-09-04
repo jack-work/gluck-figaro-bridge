@@ -28,6 +28,23 @@ Needs both herald roles — `say` and `inbox` — because it is the one caller
 that genuinely reads your replies. Compare `kcal-notify`, which holds `say`
 alone and therefore cannot.
 
+## Commands
+
+| | |
+|---|---|
+| `/help` | the list |
+| `/aria` | which aria this chat is bound to |
+| `/arias` | recent arias to choose from |
+| `/bind <id>` | point this chat at an existing aria |
+| `/new` | mint a fresh aria and bind to it |
+| `/cut` | stop the running turn |
+
+Commands are handled by the bridge, not passed to the aria: which aria a chat
+talks to cannot be the current aria's decision.
+
+The binding is remembered across restarts. Without that, a restart would
+silently start a new conversation — the kind of loss only noticed later.
+
 ## Run
 
 ```sh
