@@ -26,7 +26,10 @@ Just type to talk to the bound aria.
 /bind ` + "`<id>`" + ` — point this chat at an existing aria
 /new — mint a fresh aria and bind to it
 /cut — stop the running turn
-/help — this list`
+/help — this list
+
+Replies are not automatic: an aria answers you by running
+` + "`herald say`" + `, so it speaks when it means to.`
 
 // binding remembers which aria this chat talks to, across restarts. Without
 // it a restart would silently start a new conversation, which is the kind of

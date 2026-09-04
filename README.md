@@ -66,14 +66,13 @@ does the right thing with it: a message arriving mid-turn is injected as a
 *steering* node into the running turn, so "and also check X" lands while the
 aria is still working.
 
-Replies are therefore **watched, not awaited**. A blocking `figaro send`
-attaches to the aria's live stream rather than to "the answer to my message" —
-verified, and two concurrent senders both receive whatever the aria says next,
-duplicating one reply and losing the other. So a separate watcher polls for
-new prose and forwards it.
+**Replies are explicit.** Nothing an aria prints reaches the phone on its own;
+it answers by running `herald say --to gluck …`.
 
-Only `prose` output is forwarded: thinking is private, tool calls are noise on
-a phone, and steering nodes are your own words coming back.
+That is the design, not a limitation of it. Tailing an aria's output sends
+half-formed thinking, tool chatter and stray newlines to a phone, and makes
+the aria a subject of observation rather than a correspondent. Requiring the
+call means every message that arrives was meant to.
 
 ## Credentials
 

@@ -39,7 +39,6 @@ func main() {
 		once       = flag.Bool("once", false, "handle at most one batch, then exit")
 		dryRun     = flag.Bool("dry-run", false, "print what would be sent to figaro; call nothing")
 		figBin     = flag.String("figaro", envOr("FIGARO_BIN", "figaro"), "figaro binary")
-		replyPoll  = flag.Duration("reply-poll", 3*time.Second, "how often to check the aria for new output")
 		credential = flag.String("credential", envOr("FIGARO_BRIDGE_CREDENTIAL", "herald"), "hush oauth credential name")
 	)
 	flag.Parse()
@@ -65,11 +64,6 @@ func main() {
 	}
 
 	log.Printf("herald=%s aria=%s to=%s", *api, orAuto(*aria), *to)
-
-	// Replies are watched, not awaited: delivery must never block on a turn.
-	if !*dryRun {
-		go b.watchReplies(ctx, *replyPoll)
-	}
 
 	backoff := 5 * time.Second
 	for ctx.Err() == nil {
@@ -143,9 +137,20 @@ type bridge struct {
 
 // brief is prepended to the first message of a run, so an aria that also has
 // a terminal open knows which door a prompt came through and how to answer.
-const brief = "You are being addressed over Telegram, through herald. " +
-	"Keep replies phone-sized: short paragraphs, no long code dumps, no ANSI. " +
-	"Later messages from this chat are marked [telegram]."
+// brief tells an aria how to answer. Nothing it prints reaches the phone on
+// its own: it must say so deliberately, with `herald say`.
+//
+// That is the point of the design rather than a limitation of it. Tailing an
+// aria's output sends half-formed thinking, tool chatter and stray newlines
+// to a phone, and makes the aria a subject of observation rather than a
+// correspondent. Requiring an explicit call means every message that arrives
+// was meant to.
+const brief = "You are being addressed over Telegram, through herald.\n\n" +
+	"To reply, run: herald say --to %s <markdown>\n" +
+	"(it also reads stdin, and renders markdown as Telegram HTML)\n\n" +
+	"NOTHING you print reaches the phone on its own — only what you send with " +
+	"that command. Keep it phone-sized: short paragraphs, no long code dumps, " +
+	"no ANSI. Later messages from this chat are marked [telegram]."
 
 func (b *bridge) handle(ctx context.Context, m herald.Message) error {
 	log.Printf("from=%s: %.80q", m.From, m.Text)
@@ -173,7 +178,7 @@ func (b *bridge) handle(ctx context.Context, m herald.Message) error {
 
 	prompt := "[telegram] " + text
 	if !b.briefed {
-		prompt = brief + "\n\n---\n\n" + prompt
+		prompt = fmt.Sprintf(brief, b.to) + "\n\n---\n\n" + prompt
 		b.briefed = true
 	}
 
