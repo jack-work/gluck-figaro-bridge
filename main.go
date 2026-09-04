@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -32,19 +31,23 @@ func main() {
 	log.SetPrefix("figaro-bridge ")
 
 	var (
-		api    = flag.String("herald", envOr("HERALD_API", "https://herald.kelliher.info"), "herald base URL")
-		aria   = flag.String("aria", os.Getenv("FIGARO_BRIDGE_ARIA"), "aria to route into (default: whatever /bind last chose)")
-		stateP = flag.String("state", envOr("FIGARO_BRIDGE_STATE", defaultStatePath()), "where the current binding is remembered")
-		to     = flag.String("to", envOr("FIGARO_BRIDGE_TO", "gluck"), "herald recipient for replies")
-		wait   = flag.Duration("wait", 55*time.Second, "long-poll window (herald caps at 60s)")
-		turnTO = flag.Duration("turn-timeout", 15*time.Minute, "kill a figaro turn that outlives this")
-		once   = flag.Bool("once", false, "handle at most one batch, then exit")
-		dryRun = flag.Bool("dry-run", false, "print what would be sent to figaro; call nothing")
-		figBin = flag.String("figaro", envOr("FIGARO_BIN", "figaro"), "figaro binary")
+		api        = flag.String("herald", envOr("HERALD_API", "https://herald.kelliher.info"), "herald base URL")
+		aria       = flag.String("aria", os.Getenv("FIGARO_BRIDGE_ARIA"), "aria to route into (default: whatever /bind last chose)")
+		stateP     = flag.String("state", envOr("FIGARO_BRIDGE_STATE", defaultStatePath()), "where the current binding is remembered")
+		to         = flag.String("to", envOr("FIGARO_BRIDGE_TO", "gluck"), "herald recipient for replies")
+		wait       = flag.Duration("wait", 55*time.Second, "long-poll window (herald caps at 60s)")
+		once       = flag.Bool("once", false, "handle at most one batch, then exit")
+		dryRun     = flag.Bool("dry-run", false, "print what would be sent to figaro; call nothing")
+		figBin     = flag.String("figaro", envOr("FIGARO_BIN", "figaro"), "figaro binary")
+		replyPoll  = flag.Duration("reply-poll", 3*time.Second, "how often to check the aria for new output")
+		credential = flag.String("credential", envOr("FIGARO_BRIDGE_CREDENTIAL", "herald"), "hush oauth credential name")
 	)
 	flag.Parse()
 
-	c := herald.New(*api, &herald.EnvTokenSource{Var: herald.DefaultTokenVar})
+	// Ask the agent for the token rather than reading it from the
+	// environment: this process outlives any token handed to it at exec.
+	tokens := newHushTokenSource(*credential)
+	c := herald.New(*api, tokens)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -58,10 +61,15 @@ func main() {
 
 	b := &bridge{
 		herald: c, aria: *aria, to: *to, binding: bind,
-		turnTimeout: *turnTO, figaro: *figBin, dryRun: *dryRun,
+		figaro: *figBin, dryRun: *dryRun,
 	}
 
 	log.Printf("herald=%s aria=%s to=%s", *api, orAuto(*aria), *to)
+
+	// Replies are watched, not awaited: delivery must never block on a turn.
+	if !*dryRun {
+		go b.watchReplies(ctx, *replyPoll)
+	}
 
 	backoff := 5 * time.Second
 	for ctx.Err() == nil {
@@ -69,6 +77,20 @@ func main() {
 		if err != nil {
 			if ctx.Err() != nil {
 				break
+			}
+			if isUnauthorized(err) {
+				// Inbox deliberately does not auto-retry — a re-issued poll
+				// could double-deliver — so refresh here and let the next
+				// tick use the new token.
+				if _, rerr := tokens.Refresh(ctx); rerr != nil {
+					log.Printf("token refresh failed: %v", rerr)
+				} else {
+					log.Printf("token refreshed after 401")
+					// Fall through to the backoff sleep rather than retrying
+					// instantly: if the fresh token is ALSO rejected, an
+					// immediate retry is a hot loop against both hush and
+					// herald.
+				}
 			}
 			log.Printf("inbox: %v (retry in %s)", err, backoff)
 			select {
@@ -110,14 +132,13 @@ func main() {
 }
 
 type bridge struct {
-	briefed     bool
-	binding     *binding
-	herald      *herald.Client
-	aria        string
-	to          string
-	turnTimeout time.Duration
-	figaro      string
-	dryRun      bool
+	briefed bool
+	binding *binding
+	herald  *herald.Client
+	aria    string
+	to      string
+	figaro  string
+	dryRun  bool
 }
 
 // brief is prepended to the first message of a run, so an aria that also has
@@ -161,40 +182,25 @@ func (b *bridge) handle(ctx context.Context, m herald.Message) error {
 		return nil
 	}
 
-	reply, err := b.ask(ctx, prompt)
-	if err != nil {
-		reply = "⚠️ " + err.Error()
-	}
-	if strings.TrimSpace(reply) == "" {
-		reply = "(no output)"
-	}
-
-	sendCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-	return b.herald.Say(sendCtx, b.to, reply)
+	// Deliver and return. Figaro owns the queue: a message arriving mid-turn
+	// is injected as a steering node into the running turn, so a follow-up
+	// thought reaches the aria while it is still working rather than waiting
+	// behind it. Replies come back through the watcher, not from here.
+	return b.deliver(ctx, prompt)
 }
 
-// ask runs one figaro turn and returns its output.
-func (b *bridge) ask(ctx context.Context, prompt string) (string, error) {
-	args := []string{"-A", "send", "-r"}
+// deliver hands a prompt to figaro without waiting for the turn.
+func (b *bridge) deliver(ctx context.Context, prompt string) error {
+	args := []string{"-A", "send", "-f"}
 	if b.aria != "" {
 		args = append(args, "--id", b.aria)
 	}
 	args = append(args, "--", prompt)
 
-	ctx, cancel := context.WithTimeout(ctx, b.turnTimeout)
-	defer cancel()
-
-	out, err := exec.CommandContext(ctx, b.figaro, args...).Output()
-	text := strings.TrimSpace(string(out))
-	if err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			return text, fmt.Errorf("figaro: %s", strings.TrimSpace(string(ee.Stderr)))
-		}
-		return text, fmt.Errorf("figaro: %w", err)
+	if _, err := b.figaroOut(ctx, 60*time.Second, args...); err != nil {
+		return err
 	}
-	return text, nil
+	return nil
 }
 
 // defaultStatePath keeps the binding beside other user state.
@@ -208,6 +214,12 @@ func defaultStatePath() string {
 		dir = filepath.Join(home, ".local", "state")
 	}
 	return filepath.Join(dir, "figaro-bridge", "binding.json")
+}
+
+// isUnauthorized reports a 401 from herald.
+func isUnauthorized(err error) bool {
+	var ae *herald.APIError
+	return errors.As(err, &ae) && ae.Status == 401
 }
 
 func orAuto(s string) string {

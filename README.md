@@ -60,5 +60,24 @@ The token comes from hush; the unit holds no credential of its own.
 
 ## Delivery
 
-At-least-once. A message is acknowledged only after the reply is out, so a
-crash mid-turn replays it rather than losing it.
+Messages are handed to figaro **immediately**, with `send --forget`, so a
+second thought never waits behind the first turn. Figaro owns the queue and
+does the right thing with it: a message arriving mid-turn is injected as a
+*steering* node into the running turn, so "and also check X" lands while the
+aria is still working.
+
+Replies are therefore **watched, not awaited**. A blocking `figaro send`
+attaches to the aria's live stream rather than to "the answer to my message" —
+verified, and two concurrent senders both receive whatever the aria says next,
+duplicating one reply and losing the other. So a separate watcher polls for
+new prose and forwards it.
+
+Only `prose` output is forwarded: thinking is private, tool calls are noise on
+a phone, and steering nodes are your own words coming back.
+
+## Credentials
+
+The token comes from the hush agent and is re-fetched on demand, because a
+long-running process outlives any token handed to it at exec. On a 401 the
+bridge forces `hush oauth refresh`: hush's `get` never blocks on a refresh, so
+asking it twice would hand back the same dead token.
