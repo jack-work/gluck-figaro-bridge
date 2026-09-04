@@ -1,0 +1,24 @@
+# User unit: install to ~/.config/systemd/user/ and
+#   systemctl --user enable --now figaro-bridge
+#
+# This runs on the WORKSTATION, as you, because it shells out to figaro and
+# figaro's store is yours. spain never reaches in here.
+#
+# The bearer token comes from hush, which owns the refresh loop. Running the
+# binary through `hush figaro-bridge` is what injects it — the unit itself
+# holds no credential.
+
+[Unit]
+Description=figaro bridge — telegram (via herald) into figaro
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/go/bin/hush figaro-bridge
+Restart=always
+RestartSec=10
+Environment=PATH=%h/.nix-profile/bin:%h/go/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
