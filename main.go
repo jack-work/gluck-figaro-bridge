@@ -172,7 +172,7 @@ const brief = "You are being addressed over Telegram, through herald.\n\n" +
 	"no ANSI. Later messages from this chat are marked [telegram]."
 
 func (b *bridge) handle(ctx context.Context, m herald.Message) error {
-	log.Printf("from=%s: %.80q", m.From, m.Text)
+	log.Printf("from=%s: %.80q (%d media)", m.From, m.Text, len(m.Media))
 
 	text := strings.TrimSpace(m.Text)
 
@@ -193,6 +193,16 @@ func (b *bridge) handle(ctx context.Context, m herald.Message) error {
 			return nil
 		}
 		text = follow
+	}
+
+	// Fetch attachments BEFORE the prompt goes out, so the aria is never
+	// told about a file that is not yet on this disk.
+	if notes := b.fetchMedia(ctx, m); notes != "" {
+		if text == "" {
+			text = notes
+		} else {
+			text += "\n\n" + notes
+		}
 	}
 
 	prompt := "[telegram] " + text

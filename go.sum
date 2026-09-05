@@ -8,6 +8,8 @@ github.com/jack-work/gluck-herald v0.2.1 h1:T++5YN/1+hJKBzNwPkjvdtPwXIlwsLfSEgaa
 github.com/jack-work/gluck-herald v0.2.1/go.mod h1:k1OdH7Ob5C/tSyXp+yXPIaUtzT0bySHvErVDs7dn7WY=
 github.com/jack-work/gluck-herald v0.3.0 h1:BuigJJaUXEatJeMru6A90OAv4KaYS4wtvEfyuMi9Dfg=
 github.com/jack-work/gluck-herald v0.3.0/go.mod h1:k1OdH7Ob5C/tSyXp+yXPIaUtzT0bySHvErVDs7dn7WY=
+github.com/jack-work/gluck-herald v0.4.0 h1:c2bqkUm+eYhJrxgk6wKPBXpd6OK5z4QwY8UbMFefx7c=
+github.com/jack-work/gluck-herald v0.4.0/go.mod h1:k1OdH7Ob5C/tSyXp+yXPIaUtzT0bySHvErVDs7dn7WY=
 github.com/jack-work/jkrpc v0.1.0 h1:qx03oLiVLuCL/2j3MDy0KLPvGs0Soja/oaQ4YlM9cVg=
 github.com/jack-work/jkrpc v0.1.0/go.mod h1:eY1OORs32+NWXRfbMPaX2q7jg58/7kDPB/PyoKJXZcY=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

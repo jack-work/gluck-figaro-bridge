@@ -4,7 +4,7 @@ go 1.25.8
 
 require (
 	github.com/jack-work/figaro v0.32.0
-	github.com/jack-work/gluck-herald v0.3.0
+	github.com/jack-work/gluck-herald v0.4.0
 )
 
 require (
