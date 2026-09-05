@@ -4,7 +4,10 @@ go 1.25.8
 
 require (
 	github.com/jack-work/figaro v0.32.0
-	github.com/jack-work/gluck-herald v0.2.1
+	github.com/jack-work/gluck-herald v0.3.0
 )
 
-require github.com/jack-work/jkrpc v0.1.0 // indirect
+require (
+	github.com/jack-work/gluck-authz v0.1.1 // indirect
+	github.com/jack-work/jkrpc v0.1.0 // indirect
+)

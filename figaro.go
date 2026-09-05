@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/jack-work/figaro/api/transport"
@@ -23,6 +24,11 @@ import (
 // that other programs can import it.
 type figaroClient struct {
 	socket string
+
+	// onNotify receives daemon pushes on every aria connection. Used to
+	// drive the typing indicator: a connection that only sends would learn
+	// nothing about when work starts.
+	onNotify sdk.NotifyHandler
 
 	mu      sync.Mutex
 	angelus *sdk.Angelus
@@ -78,7 +84,7 @@ func (f *figaroClient) aria(ctx context.Context, id string) (*sdk.Aria, error) {
 	if err != nil {
 		return nil, fmt.Errorf("attach %s: %w", id, err)
 	}
-	c, err := sdk.DialAria(transport.UnixEndpoint(att.Endpoint.Address), nil)
+	c, err := sdk.DialAria(transport.UnixEndpoint(att.Endpoint.Address), f.onNotify)
 	if err != nil {
 		return nil, fmt.Errorf("dial aria %s: %w", id, err)
 	}
@@ -201,3 +207,64 @@ func (f *figaroClient) List(ctx context.Context, limit int) ([]ariaSummary, erro
 	}
 	return out, nil
 }
+
+// ---------- roles ----------
+
+// Role is an unbound form carrying target-aria: a name that points at
+// whichever aria currently holds the seat.
+type Role struct {
+	FormID     string // "@96447061"
+	Name       string
+	TargetAria string
+}
+
+// Roles lists the roles the daemon knows about.
+func (f *figaroClient) Roles(ctx context.Context) ([]Role, error) {
+	ang, err := f.dialAngelus()
+	if err != nil {
+		return nil, err
+	}
+	list, err := ang.ListGlobal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []Role
+	for _, a := range list.Figaros {
+		if a.TargetAria == "" {
+			continue
+		}
+		name := a.Name
+		if name == "" {
+			name = a.Mantra
+		}
+		out = append(out, Role{FormID: a.ID, Name: name, TargetAria: a.TargetAria})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// ResolveRole returns the aria a role currently points at.
+//
+// Deliberately resolved at every send rather than cached. A role is a seat,
+// not an alias: when succession moves it to another aria, the next message
+// must follow the seat. Caching the answer would pin the chat to whoever
+// happened to hold it when you attended.
+func (f *figaroClient) ResolveRole(ctx context.Context, formID string) (string, error) {
+	id := strings.TrimPrefix(formID, "@")
+	roles, err := f.Roles(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, r := range roles {
+		if strings.TrimPrefix(r.FormID, "@") == id {
+			if r.TargetAria == "" {
+				return "", fmt.Errorf("role %s points at no aria", formID)
+			}
+			return r.TargetAria, nil
+		}
+	}
+	return "", fmt.Errorf("no role %s", formID)
+}
+
+// IsRole reports whether a target names a role rather than an aria.
+func IsRole(target string) bool { return strings.HasPrefix(target, "@") }

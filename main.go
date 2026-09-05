@@ -63,9 +63,21 @@ func main() {
 		*aria = bind.Aria
 	}
 
+	// Typing is driven by daemon pushes, so the aria connection must
+	// subscribe rather than only send.
+	act := newActivity()
+	fig := newFigaroClient(*socket)
+	fig.onNotify = act.notify
+
 	b := &bridge{
-		herald: c, aria: *aria, to: *to, binding: bind,
-		figaro: newFigaroClient(*socket), dryRun: *dryRun,
+		herald: c, attends: *aria, to: *to, binding: bind,
+		figaro: fig, dryRun: *dryRun,
+	}
+
+	if !*dryRun {
+		go holdTyping(ctx, act, func(c2 context.Context) error {
+			return c.Typing(c2, *to)
+		})
 	}
 
 	log.Printf("herald=%s aria=%s to=%s", *api, orAuto(*aria), *to)
@@ -134,7 +146,7 @@ type bridge struct {
 	briefed bool
 	binding *binding
 	herald  *herald.Client
-	aria    string
+	attends string
 	to      string
 	figaro  *figaroClient
 	dryRun  bool
@@ -151,7 +163,9 @@ type bridge struct {
 // correspondent. Requiring an explicit call means every message that arrives
 // was meant to.
 const brief = "You are being addressed over Telegram, through herald.\n\n" +
-	"To reply, run: herald say --to %s <markdown>\n" +
+	"To reply, run: herald say --to %s --from \"<your mantra>\" <markdown>\n" +
+	"(the --from label and your aria id are appended as a footer, so Gluck can\n" +
+	"see which of us answered)\n" +
 	"(it also reads stdin, and renders markdown as Telegram HTML)\n\n" +
 	"NOTHING you print reaches the phone on its own: only what you send with " +
 	"that command. Keep it phone-sized: short paragraphs, no long code dumps, " +
@@ -188,7 +202,7 @@ func (b *bridge) handle(ctx context.Context, m herald.Message) error {
 	}
 
 	if b.dryRun {
-		fmt.Printf("would send to aria %s:\n%s\n", orAuto(b.aria), prompt)
+		fmt.Printf("would send to aria %s:\n%s\n", orAuto(b.attends), prompt)
 		return nil
 	}
 
@@ -201,17 +215,23 @@ func (b *bridge) handle(ctx context.Context, m herald.Message) error {
 
 // deliver hands a prompt to figaro without waiting for the turn.
 func (b *bridge) deliver(ctx context.Context, prompt string) error {
-	if b.aria == "" {
+	if b.attends == "" {
 		id, err := b.figaro.Create(ctx)
 		if err != nil {
 			return err
 		}
-		b.bind(id)
-		log.Printf("no aria bound; minted %s", id)
+		b.attend(id)
+		log.Printf("attending nothing; minted %s", id)
+	}
+	// Resolved per message, so a role that changes hands between messages
+	// delivers to whoever holds it now.
+	target, err := b.target(ctx)
+	if err != nil {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	return b.figaro.Send(ctx, b.aria, prompt)
+	return b.figaro.Send(ctx, target, prompt)
 }
 
 // defaultStatePath keeps the binding beside other user state.

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,10 +79,10 @@ func (b *bridge) command(ctx context.Context, text string) (reply string, prompt
 		return helpText, "", true
 
 	case "/aria":
-		if b.aria == "" {
+		if b.attends == "" {
 			return "no aria bound: send a message and one is minted", "", true
 		}
-		return "bound to `" + b.aria + "`" + b.describe(ctx, b.aria), "", true
+		return "bound to `" + b.attends + "`" + b.describe(ctx, b.attends), "", true
 
 	case "/arias":
 		list, err := b.figaro.List(ctx, 12)
@@ -94,7 +95,7 @@ func (b *bridge) command(ctx context.Context, text string) (reply string, prompt
 			if a.Mantra != "" {
 				line += "  " + a.Mantra
 			}
-			if a.ID == b.aria {
+			if a.ID == b.attends {
 				line = "▸ " + line
 			}
 			lines = append(lines, line)
@@ -104,30 +105,63 @@ func (b *bridge) command(ctx context.Context, text string) (reply string, prompt
 		}
 		return strings.Join(lines, "\n"), "", true
 
-	case "/bind":
+	case "/attend", "/bind":
 		if rest == "" {
-			return "usage: /bind <aria-id>", "", true
+			return "usage: /attend <aria-id|@role>", "", true
 		}
-		id := strings.Fields(rest)[0]
-		if !b.figaro.Exists(ctx, id) {
-			return "⚠️ no such aria: `" + id + "`", "", true
+		target := strings.Fields(rest)[0]
+
+		if IsRole(target) {
+			held, err := b.figaro.ResolveRole(ctx, target)
+			if err != nil {
+				return "⚠️ " + err.Error(), "", true
+			}
+			b.attend(target)
+			return "attending role `" + target + "`\nheld by `" + held + "`" +
+				b.describe(ctx, held), "", true
 		}
-		b.bind(id)
-		return "bound to `" + id + "`" + b.describe(ctx, id), "", true
+		if !b.figaro.Exists(ctx, target) {
+			return "⚠️ no such aria: `" + target + "`", "", true
+		}
+		b.attend(target)
+		return "attending `" + target + "`" + b.describe(ctx, target), "", true
 
 	case "/new":
 		id, err := b.figaro.Create(ctx)
 		if err != nil {
 			return "⚠️ " + err.Error(), "", true
 		}
-		b.bind(id)
+		b.attend(id)
 		return "new aria `" + id + "`", rest, true
 
-	case "/cut":
-		if b.aria == "" {
-			return "no aria bound", "", true
+	case "/roles":
+		roles, err := b.figaro.Roles(ctx)
+		if err != nil {
+			return "⚠️ " + err.Error(), "", true
 		}
-		if err := b.figaro.Interrupt(ctx, b.aria); err != nil {
+		if len(roles) == 0 {
+			return "no roles", "", true
+		}
+		var lines []string
+		for _, r := range roles {
+			line := "`" + r.FormID + "`"
+			if r.Name != "" {
+				line += "  " + r.Name
+			}
+			line += "  →  `" + r.TargetAria + "`"
+			if r.FormID == b.attends {
+				line = "▸ " + line
+			}
+			lines = append(lines, line)
+		}
+		return strings.Join(lines, "\n"), "", true
+
+	case "/cut":
+		target, err := b.target(ctx)
+		if err != nil {
+			return "⚠️ " + err.Error(), "", true
+		}
+		if err := b.figaro.Interrupt(ctx, target); err != nil {
 			return "⚠️ " + err.Error(), "", true
 		}
 		return "cut.", "", true
@@ -144,12 +178,24 @@ func (b *bridge) describe(ctx context.Context, aria string) string {
 	return ""
 }
 
-// bind points this chat at an aria and remembers it. Rebinding re-briefs, so
-// the new aria is told how to answer.
-func (b *bridge) bind(aria string) {
-	b.aria = aria
+// attend points this chat at an aria or a role and remembers it. Attending
+// something new re-briefs, so the new aria is told how to answer.
+func (b *bridge) attend(target string) {
+	b.attends = target
 	b.briefed = false
 	if b.binding != nil {
-		b.binding.set(aria)
+		b.binding.set(target)
 	}
+}
+
+// target resolves what this chat attends to a concrete aria id, following a
+// role to whoever currently holds it.
+func (b *bridge) target(ctx context.Context) (string, error) {
+	if b.attends == "" {
+		return "", fmt.Errorf("attending nothing")
+	}
+	if IsRole(b.attends) {
+		return b.figaro.ResolveRole(ctx, b.attends)
+	}
+	return b.attends, nil
 }
