@@ -2,10 +2,11 @@
 // back out, over herald.
 //
 // It runs on the WORKSTATION, not on spain, and that is the whole design.
-// It long-polls herald's inbox and shells out to a local `figaro send`, so
-// spain never reaches into the figaro store, needs no credential for this
-// machine, and cannot push anything into an aria. The trust arrow points
-// outward only, and herald stays ignorant of what figaro is.
+// It long-polls herald's inbox and speaks to the local figaro daemon over its
+// own socket, so spain never reaches into the figaro store, needs no
+// credential for this machine, and cannot push anything into an aria. The
+// trust arrow points outward only, and herald stays ignorant of what figaro
+// is.
 //
 // Herald is a dependency here; the dependency does not run the other way.
 package main
@@ -38,8 +39,8 @@ func main() {
 		wait       = flag.Duration("wait", 55*time.Second, "long-poll window (herald caps at 60s)")
 		once       = flag.Bool("once", false, "handle at most one batch, then exit")
 		dryRun     = flag.Bool("dry-run", false, "print what would be sent to figaro; call nothing")
-		figBin     = flag.String("figaro", envOr("FIGARO_BIN", "figaro"), "figaro binary")
 		credential = flag.String("credential", envOr("FIGARO_BRIDGE_CREDENTIAL", "herald"), "hush oauth credential name")
+		socket     = flag.String("angelus", envOr("FIGARO_ANGELUS_SOCKET", ""), "figaro angelus socket (default: $XDG_RUNTIME_DIR/figaro/angelus.sock)")
 	)
 	flag.Parse()
 
@@ -53,14 +54,18 @@ func main() {
 
 	// A binding survives restarts: without it a restart would silently start
 	// a new conversation, which is the kind of loss only noticed later.
+	//
+	// A saved binding beats the flag. The flag is where this chat starts on a
+	// machine that has never run the bridge; once /bind has been used, that
+	// choice is the user's and a restart must not quietly undo it.
 	bind := loadBinding(*stateP)
-	if *aria == "" {
+	if bind.Aria != "" {
 		*aria = bind.Aria
 	}
 
 	b := &bridge{
 		herald: c, aria: *aria, to: *to, binding: bind,
-		figaro: *figBin, dryRun: *dryRun,
+		figaro: newFigaroClient(*socket), dryRun: *dryRun,
 	}
 
 	log.Printf("herald=%s aria=%s to=%s", *api, orAuto(*aria), *to)
@@ -131,7 +136,7 @@ type bridge struct {
 	herald  *herald.Client
 	aria    string
 	to      string
-	figaro  string
+	figaro  *figaroClient
 	dryRun  bool
 }
 
@@ -196,16 +201,17 @@ func (b *bridge) handle(ctx context.Context, m herald.Message) error {
 
 // deliver hands a prompt to figaro without waiting for the turn.
 func (b *bridge) deliver(ctx context.Context, prompt string) error {
-	args := []string{"-A", "send", "-f"}
-	if b.aria != "" {
-		args = append(args, "--id", b.aria)
+	if b.aria == "" {
+		id, err := b.figaro.Create(ctx)
+		if err != nil {
+			return err
+		}
+		b.bind(id)
+		log.Printf("no aria bound; minted %s", id)
 	}
-	args = append(args, "--", prompt)
-
-	if _, err := b.figaroOut(ctx, 60*time.Second, args...); err != nil {
-		return err
-	}
-	return nil
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	return b.figaro.Send(ctx, b.aria, prompt)
 }
 
 // defaultStatePath keeps the binding beside other user state.

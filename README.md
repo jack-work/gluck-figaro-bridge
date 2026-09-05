@@ -22,6 +22,20 @@ runs on spain.
 herald is a dependency of this program; the dependency does not run the other
 way. Herald knows nothing about figaro, and that is deliberate.
 
+## It speaks figaro's protocol, not its CLI
+
+The bridge imports `github.com/jack-work/figaro/sdk` and talks to the angelus
+daemon over its own socket. It used to shell out to `figaro send`, spawning a
+process per message and parsing stdout.
+
+The CLI is a thin wrapper over the same JSON-RPC contract, so going through it
+bought nothing and cost a fork per message, plus a dependency on output
+formats that are free to change. `sdk` sits outside `internal/` precisely so
+other programs can import it.
+
+Connections are cached per aria: opening a socket per message would give back
+most of what dropping the CLI was meant to save.
+
 ## Roles
 
 Needs both herald roles, `say` and `inbox`, because it is the one caller

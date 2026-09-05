@@ -3,12 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // Slash commands.
@@ -87,46 +84,50 @@ func (b *bridge) command(ctx context.Context, text string) (reply string, prompt
 		return "bound to `" + b.aria + "`" + b.describe(ctx, b.aria), "", true
 
 	case "/arias":
-		out, err := b.figaroOut(ctx, 30*time.Second, "-A", "list", "-n", "12")
+		list, err := b.figaro.List(ctx, 12)
 		if err != nil {
 			return "⚠️ " + err.Error(), "", true
 		}
-		return "```\n" + strings.TrimSpace(out) + "\n```", "", true
+		var lines []string
+		for _, a := range list {
+			line := "`" + a.ID + "`"
+			if a.Mantra != "" {
+				line += "  " + a.Mantra
+			}
+			if a.ID == b.aria {
+				line = "▸ " + line
+			}
+			lines = append(lines, line)
+		}
+		if len(lines) == 0 {
+			return "no arias", "", true
+		}
+		return strings.Join(lines, "\n"), "", true
 
 	case "/bind":
 		if rest == "" {
 			return "usage: /bind <aria-id>", "", true
 		}
 		id := strings.Fields(rest)[0]
-		if _, err := b.figaroOut(ctx, 30*time.Second, "-A", "status", id, "-j"); err != nil {
+		if !b.figaro.Exists(ctx, id) {
 			return "⚠️ no such aria: `" + id + "`", "", true
 		}
 		b.bind(id)
 		return "bound to `" + id + "`" + b.describe(ctx, id), "", true
 
 	case "/new":
-		out, err := b.figaroOut(ctx, 60*time.Second, "-A", "new", "-j")
+		id, err := b.figaro.Create(ctx)
 		if err != nil {
 			return "⚠️ " + err.Error(), "", true
 		}
-		var res struct {
-			AriaID string `json:"aria_id"`
-		}
-		line := strings.TrimSpace(out)
-		if i := strings.LastIndex(line, "\n"); i >= 0 {
-			line = strings.TrimSpace(line[i+1:])
-		}
-		if err := json.Unmarshal([]byte(line), &res); err != nil || res.AriaID == "" {
-			return "⚠️ could not read the new aria id from: " + out, "", true
-		}
-		b.bind(res.AriaID)
-		return "new aria `" + res.AriaID + "`", rest, true
+		b.bind(id)
+		return "new aria `" + id + "`", rest, true
 
 	case "/cut":
 		if b.aria == "" {
 			return "no aria bound", "", true
 		}
-		if _, err := b.figaroOut(ctx, 30*time.Second, "-A", "cut", b.aria); err != nil {
+		if err := b.figaro.Interrupt(ctx, b.aria); err != nil {
 			return "⚠️ " + err.Error(), "", true
 		}
 		return "cut.", "", true
@@ -134,20 +135,13 @@ func (b *bridge) command(ctx context.Context, text string) (reply string, prompt
 	return "unknown command " + verb + "\n\n" + helpText, "", true
 }
 
-// describe returns a short ", <mantra>" suffix, or "" if unavailable. Best
+// describe returns a short ": <mantra>" suffix, or "" if unavailable. Best
 // effort: naming the aria is the point, and the mantra is a bonus.
 func (b *bridge) describe(ctx context.Context, aria string) string {
-	out, err := b.figaroOut(ctx, 15*time.Second, "-A", "status", aria, "-j")
-	if err != nil {
-		return ""
+	if m := b.figaro.Mantra(ctx, aria); m != "" {
+		return ": " + m
 	}
-	var meta struct {
-		Mantra string `json:"mantra"`
-	}
-	if json.Unmarshal([]byte(out), &meta) != nil || meta.Mantra == "" {
-		return ""
-	}
-	return ", " + meta.Mantra
+	return ""
 }
 
 // bind points this chat at an aria and remembers it. Rebinding re-briefs, so
@@ -158,14 +152,4 @@ func (b *bridge) bind(aria string) {
 	if b.binding != nil {
 		b.binding.set(aria)
 	}
-}
-
-func (b *bridge) figaroOut(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, b.figaro, args...).Output()
-	if err != nil {
-		return string(out), fmt.Errorf("figaro %s: %w", strings.Join(args, " "), err)
-	}
-	return string(out), nil
 }
