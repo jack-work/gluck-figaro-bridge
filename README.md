@@ -15,7 +15,7 @@ Telegram ──▶ herald (spain) ──┐
 ```
 
 The laptop pulls. spain never reaches into the figaro store, needs no
-credential for this machine, and cannot push anything into an aria — the trust
+credential for this machine, and cannot push anything into an aria: the trust
 arrow points outward only. It is also why herald could ship before figaro ever
 runs on spain.
 
@@ -24,7 +24,7 @@ way. Herald knows nothing about figaro, and that is deliberate.
 
 ## Roles
 
-Needs both herald roles — `say` and `inbox` — because it is the one caller
+Needs both herald roles, `say` and `inbox`, because it is the one caller
 that genuinely reads your replies. Compare `kcal-notify`, which holds `say`
 alone and therefore cannot.
 
@@ -43,7 +43,7 @@ Commands are handled by the bridge, not passed to the aria: which aria a chat
 talks to cannot be the current aria's decision.
 
 The binding is remembered across restarts. Without that, a restart would
-silently start a new conversation — the kind of loss only noticed later.
+silently start a new conversation: the kind of loss only noticed later.
 
 ## Run
 

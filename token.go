@@ -59,8 +59,8 @@ func (h *hushTokenSource) Token(ctx context.Context) (string, error) {
 }
 
 // Refresh forces the agent to mint a new token. Called after a 401: a token
-// can be valid by the clock and still rejected — revoked, or signed by a
-// rotated key — and only the 401 knows.
+// can be valid by the clock and still rejected: revoked, or signed by a
+// rotated key: and only the 401 knows.
 func (h *hushTokenSource) Refresh(ctx context.Context) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -82,7 +82,7 @@ func (h *hushTokenSource) runLocked(ctx context.Context, argv []string) (string,
 	}
 	tok := strings.TrimSpace(string(out))
 	if tok == "" {
-		return "", errors.New("hush returned no token — is this credential registered? (hush oauth device-login)")
+		return "", errors.New("hush returned no token: is this credential registered? (hush oauth device-login)")
 	}
 	h.token = tok
 	h.fetched = time.Now()

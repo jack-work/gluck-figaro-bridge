@@ -73,8 +73,8 @@ func main() {
 				break
 			}
 			if isUnauthorized(err) {
-				// Inbox deliberately does not auto-retry — a re-issued poll
-				// could double-deliver — so refresh here and let the next
+				// Inbox deliberately does not auto-retry: a re-issued poll
+				// could double-deliver: so refresh here and let the next
 				// tick use the new token.
 				if _, rerr := tokens.Refresh(ctx); rerr != nil {
 					log.Printf("token refresh failed: %v", rerr)
@@ -148,7 +148,7 @@ type bridge struct {
 const brief = "You are being addressed over Telegram, through herald.\n\n" +
 	"To reply, run: herald say --to %s <markdown>\n" +
 	"(it also reads stdin, and renders markdown as Telegram HTML)\n\n" +
-	"NOTHING you print reaches the phone on its own — only what you send with " +
+	"NOTHING you print reaches the phone on its own: only what you send with " +
 	"that command. Keep it phone-sized: short paragraphs, no long code dumps, " +
 	"no ANSI. Later messages from this chat are marked [telegram]."
 

@@ -21,12 +21,12 @@ const helpText = `**figaro-bridge**
 
 Just type to talk to the bound aria.
 
-/aria — which aria this chat is bound to
-/arias — recent arias to choose from
-/bind ` + "`<id>`" + ` — point this chat at an existing aria
-/new — mint a fresh aria and bind to it
-/cut — stop the running turn
-/help — this list
+/aria: which aria this chat is bound to
+/arias: recent arias to choose from
+/bind ` + "`<id>`" + `, point this chat at an existing aria
+/new: mint a fresh aria and bind to it
+/cut: stop the running turn
+/help: this list
 
 Replies are not automatic: an aria answers you by running
 ` + "`herald say`" + `, so it speaks when it means to.`
@@ -82,7 +82,7 @@ func (b *bridge) command(ctx context.Context, text string) (reply string, prompt
 
 	case "/aria":
 		if b.aria == "" {
-			return "no aria bound — send a message and one is minted", "", true
+			return "no aria bound: send a message and one is minted", "", true
 		}
 		return "bound to `" + b.aria + "`" + b.describe(ctx, b.aria), "", true
 
@@ -134,7 +134,7 @@ func (b *bridge) command(ctx context.Context, text string) (reply string, prompt
 	return "unknown command " + verb + "\n\n" + helpText, "", true
 }
 
-// describe returns a short " — <mantra>" suffix, or "" if unavailable. Best
+// describe returns a short ", <mantra>" suffix, or "" if unavailable. Best
 // effort: naming the aria is the point, and the mantra is a bonus.
 func (b *bridge) describe(ctx context.Context, aria string) string {
 	out, err := b.figaroOut(ctx, 15*time.Second, "-A", "status", aria, "-j")
@@ -147,7 +147,7 @@ func (b *bridge) describe(ctx context.Context, aria string) string {
 	if json.Unmarshal([]byte(out), &meta) != nil || meta.Mantra == "" {
 		return ""
 	}
-	return " — " + meta.Mantra
+	return ", " + meta.Mantra
 }
 
 // bind points this chat at an aria and remembers it. Rebinding re-briefs, so
