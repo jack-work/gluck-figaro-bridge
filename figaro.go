@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jack-work/figaro/api/rpc"
 	"github.com/jack-work/figaro/api/transport"
 	"github.com/jack-work/figaro/sdk"
 )
@@ -147,17 +148,24 @@ func (f *figaroClient) Create(ctx context.Context) (string, error) {
 	return resp.FigaroID, nil
 }
 
-// Interrupt stops the running turn.
-func (f *figaroClient) Interrupt(ctx context.Context, id string) error {
+// Hangup stops the running turn and says what happened to the queue.
+//
+// The disposition is the whole difference between the two things a phone
+// might mean by "stop": keep what is waiting, or discard it. The daemon
+// returns the queue either way, which is what lets the reply name what
+// survived or hand back verbatim what was thrown away. A dropped message the
+// sender cannot see again is worse than a turn that kept running.
+func (f *figaroClient) Hangup(ctx context.Context, id string, disposition rpc.QueueDisposition) (*rpc.InterruptResponse, error) {
 	c, err := f.aria(ctx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := c.Interrupt(ctx); err != nil {
+	resp, err := c.Hangup(ctx, disposition)
+	if err != nil {
 		f.forget(id)
-		return err
+		return nil, err
 	}
-	return nil
+	return resp, nil
 }
 
 // Mantra returns an aria's mantra, or "" when it has none.

@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/jack-work/figaro/api/rpc"
+	"strconv"
 	"strings"
 )
 
@@ -23,7 +26,8 @@ Just type to talk to the bound aria.
 /arias: recent arias to choose from
 /bind ` + "`<id>`" + `, point this chat at an existing aria
 /new: mint a fresh aria and bind to it
-/cut: stop the running turn
+/hup: stop the running turn, keep anything queued
+/cut: stop it and discard the queue, which is handed back to you
 /help: this list
 
 Replies are not automatic: an aria answers you by running
@@ -156,18 +160,59 @@ func (b *bridge) command(ctx context.Context, text string) (reply string, prompt
 		}
 		return strings.Join(lines, "\n"), "", true
 
+	case "/hup", "/stop":
+		return b.hangup(ctx, rpc.QueueKeep), "", true
+
 	case "/cut":
-		target, err := b.target(ctx)
-		if err != nil {
-			return "⚠️ " + err.Error(), "", true
-		}
-		if err := b.figaro.Interrupt(ctx, target); err != nil {
-			return "⚠️ " + err.Error(), "", true
-		}
-		return "cut.", "", true
+		return b.hangup(ctx, rpc.QueueClear), "", true
 	}
 	return "unknown command " + verb + "\n\n" + helpText, "", true
 }
+
+// hangup stops the attended aria's turn and reports what became of its queue.
+//
+// Both verbs reach the same daemon call and differ only in disposition, so
+// the phone gets the same guarantee the terminal has: /hup leaves queued
+// messages to be answered next, /cut hands them back verbatim in the reply.
+// Nothing is discarded without being shown, because a message dropped
+// silently on a phone is a message the sender believes was received.
+func (b *bridge) hangup(ctx context.Context, disposition rpc.QueueDisposition) string {
+	target, err := b.target(ctx)
+	if err != nil {
+		return "⚠️ " + err.Error()
+	}
+	resp, err := b.figaro.Hangup(ctx, target, disposition)
+	if err != nil {
+		return "⚠️ " + err.Error()
+	}
+
+	head := "stopped `" + target + "`"
+	if !resp.Stopped {
+		head = "nothing was running on `" + target + "`"
+	}
+	if len(resp.Queue) == 0 {
+		if disposition == rpc.QueueClear {
+			return head + "\nqueue was empty"
+		}
+		return head + "\nnothing was queued"
+	}
+	var lines []string
+	for _, q := range resp.Queue {
+		t := strings.TrimSpace(q.Text)
+		if len(t) > 160 {
+			t = t[:160] + "…"
+		}
+		lines = append(lines, "• "+t)
+	}
+	if disposition == rpc.QueueClear {
+		return head + "\ndropped " + itoa(len(resp.Queue)) + ", returned here so nothing is lost:\n" +
+			strings.Join(lines, "\n")
+	}
+	return head + "\nstill queued (" + itoa(len(resp.Queue)) + "), it will answer these next:\n" +
+		strings.Join(lines, "\n")
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 // describe returns a short ": <mantra>" suffix, or "" if unavailable. Best
 // effort: naming the aria is the point, and the mantra is a bonus.
