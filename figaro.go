@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -300,13 +301,20 @@ func (f *figaroClient) ResolveRole(ctx context.Context, formID string) (string, 
 	for _, r := range roles {
 		if strings.TrimPrefix(r.FormID, "@") == id {
 			if r.TargetAria == "" {
-				return "", fmt.Errorf("role %s points at no aria", formID)
+				return "", fmt.Errorf("%s: %w", formID, errNotARole)
 			}
 			return r.TargetAria, nil
 		}
 	}
-	return "", fmt.Errorf("no role %s", formID)
+	// Not in the role list at all. It may still be a FORM -- Roles() only
+	// returns those carrying target-aria -- so the caller is told which
+	// question it actually failed rather than "no such thing".
+	return "", fmt.Errorf("%s: %w", formID, errNotARole)
 }
 
 // IsRole reports whether a target names a role rather than an aria.
+// errNotARole distinguishes "exists but is not a role" from a transport
+// failure, so the reply can say the useful thing instead of the literal one.
+var errNotARole = errors.New("not a role: it carries no target-aria")
+
 func IsRole(target string) bool { return strings.HasPrefix(target, "@") }

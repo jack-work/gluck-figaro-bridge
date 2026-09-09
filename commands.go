@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,21 +18,6 @@ import (
 // The bridge is a thin shell around `figaro`, so these are deliberately few:
 // enough to see what exists, point this chat at a different aria, and stop a
 // runaway turn. Anything else is a message.
-
-const helpText = `**figaro-bridge**
-
-Just type to talk to the bound aria.
-
-/aria: which aria this chat is bound to
-/arias: recent arias to choose from
-/bind ` + "`<id>`" + `, point this chat at an existing aria
-/new: mint a fresh aria and bind to it
-/hup: stop the running turn, keep anything queued
-/cut: stop it and discard the queue, which is handed back to you
-/help: this list
-
-Replies are not automatic: an aria answers you by running
-` + "`herald say`" + `, so it speaks when it means to.`
 
 // binding remembers which aria this chat talks to, across restarts. Without
 // it a restart would silently start a new conversation, which is the kind of
@@ -65,108 +51,6 @@ func (b *binding) set(aria string) {
 	if os.WriteFile(tmp, data, 0o600) == nil {
 		_ = os.Rename(tmp, b.path)
 	}
-}
-
-// command handles a slash command, returning the reply to send and whether
-// the message was a command at all. A command that also carries text (`/new
-// hello`) returns that text as a prompt to run afterwards.
-func (b *bridge) command(ctx context.Context, text string) (reply string, prompt string, handled bool) {
-	if !strings.HasPrefix(text, "/") {
-		return "", "", false
-	}
-	verb, rest, _ := strings.Cut(text, " ")
-	verb = strings.ToLower(verb)
-	rest = strings.TrimSpace(rest)
-
-	switch verb {
-	case "/help", "/start":
-		return helpText, "", true
-
-	case "/aria":
-		if b.attends == "" {
-			return "no aria bound: send a message and one is minted", "", true
-		}
-		return "bound to `" + b.attends + "`" + b.describe(ctx, b.attends), "", true
-
-	case "/arias":
-		list, err := b.figaro.List(ctx, 12)
-		if err != nil {
-			return "⚠️ " + err.Error(), "", true
-		}
-		var lines []string
-		for _, a := range list {
-			line := "`" + a.ID + "`"
-			if a.Mantra != "" {
-				line += "  " + a.Mantra
-			}
-			if a.ID == b.attends {
-				line = "▸ " + line
-			}
-			lines = append(lines, line)
-		}
-		if len(lines) == 0 {
-			return "no arias", "", true
-		}
-		return strings.Join(lines, "\n"), "", true
-
-	case "/attend", "/bind":
-		if rest == "" {
-			return "usage: /attend <aria-id|@role>", "", true
-		}
-		target := strings.Fields(rest)[0]
-
-		if IsRole(target) {
-			held, err := b.figaro.ResolveRole(ctx, target)
-			if err != nil {
-				return "⚠️ " + err.Error(), "", true
-			}
-			b.attend(target)
-			return "attending role `" + target + "`\nheld by `" + held + "`" +
-				b.describe(ctx, held), "", true
-		}
-		if !b.figaro.Exists(ctx, target) {
-			return "⚠️ no such aria: `" + target + "`", "", true
-		}
-		b.attend(target)
-		return "attending `" + target + "`" + b.describe(ctx, target), "", true
-
-	case "/new":
-		id, err := b.figaro.Create(ctx)
-		if err != nil {
-			return "⚠️ " + err.Error(), "", true
-		}
-		b.attend(id)
-		return "new aria `" + id + "`", rest, true
-
-	case "/roles":
-		roles, err := b.figaro.Roles(ctx)
-		if err != nil {
-			return "⚠️ " + err.Error(), "", true
-		}
-		if len(roles) == 0 {
-			return "no roles", "", true
-		}
-		var lines []string
-		for _, r := range roles {
-			line := "`" + r.FormID + "`"
-			if r.Name != "" {
-				line += "  " + r.Name
-			}
-			line += "  →  `" + r.TargetAria + "`"
-			if r.FormID == b.attends {
-				line = "▸ " + line
-			}
-			lines = append(lines, line)
-		}
-		return strings.Join(lines, "\n"), "", true
-
-	case "/hup", "/stop":
-		return b.hangup(ctx, rpc.QueueKeep), "", true
-
-	case "/cut":
-		return b.hangup(ctx, rpc.QueueClear), "", true
-	}
-	return "unknown command " + verb + "\n\n" + helpText, "", true
 }
 
 // hangup stops the attended aria's turn and reports what became of its queue.
@@ -243,4 +127,85 @@ func (b *bridge) target(ctx context.Context) (string, error) {
 		return b.figaro.ResolveRole(ctx, b.attends)
 	}
 	return b.attends, nil
+}
+
+// ── the handlers the table calls ─────────────────────────────────────────
+
+// listArias renders recent arias, marking the attended one.
+func (b *bridge) listArias(ctx context.Context) string {
+	list, err := b.figaro.List(ctx, 12)
+	if err != nil {
+		return "⚠️ " + err.Error()
+	}
+	var lines []string
+	for _, a := range list {
+		line := "`" + a.ID + "`"
+		if a.Mantra != "" {
+			line += "  " + a.Mantra
+		}
+		if a.ID == b.attends {
+			line = "▸ " + line
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return "no arias"
+	}
+	return strings.Join(lines, "\n")
+}
+
+// listRoles renders roles and who holds them.
+func (b *bridge) listRoles(ctx context.Context) string {
+	roles, err := b.figaro.Roles(ctx)
+	if err != nil {
+		return "⚠️ " + err.Error()
+	}
+	if len(roles) == 0 {
+		return "no roles"
+	}
+	var lines []string
+	for _, r := range roles {
+		line := "`" + r.FormID + "`"
+		if r.Name != "" {
+			line += "  " + r.Name
+		}
+		line += "  →  `" + r.TargetAria + "`"
+		if r.FormID == b.attends {
+			line = "▸ " + line
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// attendCmd points this chat at an aria or a role.
+//
+// A FORM IS NOT A ROLE, and the difference used to surface as "no role @x" --
+// which reads as "that does not exist" when the form exists perfectly well
+// and simply has no target-aria. figaro's CLI says the useful thing instead,
+// so this says it too: a form must be bound before anything can talk to it.
+func (b *bridge) attendCmd(ctx context.Context, rest string) string {
+	if rest == "" {
+		return "usage: /attend `<aria-id|@role>`"
+	}
+	target := strings.Fields(rest)[0]
+
+	if IsRole(target) {
+		held, err := b.figaro.ResolveRole(ctx, target)
+		if err != nil {
+			if errors.Is(err, errNotARole) {
+				return "⚠️ `" + target + "` is a form, not a role — it points at no aria.\n" +
+					"A role carries `target-aria`. Bind the form first (`figaro bind " +
+					target + "`), or `/roles` to see what is castable."
+			}
+			return "⚠️ " + err.Error()
+		}
+		b.attend(target)
+		return "attending role `" + target + "`\nheld by `" + held + "`" + b.describe(ctx, held)
+	}
+	if !b.figaro.Exists(ctx, target) {
+		return "⚠️ no such aria: `" + target + "`"
+	}
+	b.attend(target)
+	return "attending `" + target + "`" + b.describe(ctx, target)
 }
