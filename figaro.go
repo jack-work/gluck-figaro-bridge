@@ -77,11 +77,18 @@ func (f *figaroClient) aria(ctx context.Context, id string) (*sdk.Aria, error) {
 	}
 	f.mu.Unlock()
 
-	ang, err := f.dialAngelus()
+	// Attach through the angelus, and RETRY ONCE ON A FRESH CONNECTION.
+	//
+	// A cached socket cannot be trusted to still be there: the daemon is
+	// restarted by upgrades, by `figaro stop`, and by the memory watchdog,
+	// none of which the bridge is told about. Retrying once costs a redial
+	// on a genuine error (an aria that really is missing) and self-heals the
+	// case that otherwise never recovers.
+	att, err := f.attachOnce(ctx, id)
 	if err != nil {
-		return nil, err
+		f.forgetAngelus()
+		att, err = f.attachOnce(ctx, id)
 	}
-	att, err := ang.Attach(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("attach %s: %w", id, err)
 	}
@@ -94,6 +101,33 @@ func (f *figaroClient) aria(ctx context.Context, id string) (*sdk.Aria, error) {
 	f.arias[id] = c
 	f.mu.Unlock()
 	return c, nil
+}
+
+// attachOnce is one attempt: dial the angelus (or reuse the cached one) and
+// ask it where the aria's endpoint is.
+func (f *figaroClient) attachOnce(ctx context.Context, id string) (*rpc.AttachResponse, error) {
+	ang, err := f.dialAngelus()
+	if err != nil {
+		return nil, err
+	}
+	return ang.Attach(ctx, id)
+}
+
+// forgetAngelus drops the cached angelus connection so the next call redials.
+//
+// THIS IS THE ONE THAT WAS MISSING, and its absence was a permanent outage
+// rather than a slow path. The bridge held one angelus connection for its
+// whole life; when the daemon restarted underneath it (2026-09-09: bridge up
+// since the 8th, daemon restarted the next evening) every Attach failed with
+// `connection closed`, forever, because nothing ever redialled. The aria
+// cache had forget() from the start; the angelus never did.
+func (f *figaroClient) forgetAngelus() {
+	f.mu.Lock()
+	if f.angelus != nil {
+		_ = f.angelus.Close()
+		f.angelus = nil
+	}
+	f.mu.Unlock()
 }
 
 // forget drops a cached aria connection, so the next call redials. Used when

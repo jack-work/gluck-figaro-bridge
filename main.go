@@ -27,6 +27,11 @@ import (
 	herald "github.com/jack-work/gluck-herald/client"
 )
 
+// handleBackoffFloor is where per-message backoff starts and returns to. Two
+// seconds is short enough that a transient daemon blip is invisible, and long
+// enough that a permanent failure costs a line a second rather than hundreds.
+const handleBackoffFloor = 2 * time.Second
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("figaro-bridge ")
@@ -83,6 +88,10 @@ func main() {
 	log.Printf("herald=%s aria=%s to=%s", *api, orAuto(*aria), *to)
 
 	backoff := 5 * time.Second
+	// Separate from the inbox backoff above, because they answer different
+	// failures: that one means "herald is down", this one means "herald is
+	// fine and this message cannot be processed".
+	handleBackoff := handleBackoffFloor
 	for ctx.Err() == nil {
 		msgs, err := c.Inbox(ctx, 0, *wait)
 		if err != nil {
@@ -119,9 +128,29 @@ func main() {
 
 		for _, m := range msgs {
 			if err := b.handle(ctx, m); err != nil {
-				log.Printf("handling %d: %v", m.ID, err)
+				log.Printf("handling %d: %v (retry in %s)", m.ID, err, handleBackoff)
+				// A FAILED HANDLE MUST NOT SPIN. The message is deliberately
+				// not acked -- delivery is at-least-once and a crash should
+				// replay it -- but that means the very next poll returns the
+				// SAME message. The inbox backoff above cannot help: the poll
+				// SUCCEEDED, so it is reset to its floor.
+				//
+				// Before this, one permanently-failing message was a hot loop
+				// bounded only by how fast herald could answer: hundreds of
+				// identical log lines a second and 75s of CPU burned against a
+				// daemon socket that was never coming back.
+				select {
+				case <-ctx.Done():
+				case <-time.After(handleBackoff):
+				}
+				if handleBackoff < time.Minute {
+					handleBackoff *= 2
+				}
 				continue
 			}
+			// Recover immediately once something works: a single bad message
+			// must not slow the ones behind it.
+			handleBackoff = handleBackoffFloor
 			if *dryRun {
 				// A dry run must not consume the queue: acknowledging a
 				// message it only pretended to handle would silently discard
